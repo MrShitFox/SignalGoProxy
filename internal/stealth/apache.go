@@ -42,11 +42,13 @@ const apacheHTMLBody = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitiona
 func GetApacheResponse() []byte {
 	date := time.Now().UTC().Format(time.RFC1123)
 
+	lastModified := generatePastDate()
+
 	headers := fmt.Sprintf(
 		"HTTP/1.1 200 OK\r\n"+
 			"Date: %s\r\n"+
 			"Server: Apache/2.4.41 (Ubuntu)\r\n"+
-			"Last-Modified: Tue, 01 Sep 2025 12:00:00 GMT\r\n"+
+			"Last-Modified: %s\r\n"+
 			"ETag: \"2d-4e9a49938b880\"\r\n"+
 			"Accept-Ranges: bytes\r\n"+
 			"Content-Length: %d\r\n"+
@@ -55,6 +57,7 @@ func GetApacheResponse() []byte {
 			"Connection: close\r\n"+
 			"\r\n",
 		date,
+		lastModified,
 		len(apacheHTMLBody),
 	)
 

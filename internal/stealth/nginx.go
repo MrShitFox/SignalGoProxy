@@ -36,6 +36,9 @@ func GetNginxResponse() []byte {
 	// Format the current date into the standard GMT format for HTTP headers.
 	date := time.Now().UTC().Format(time.RFC1123)
 
+	// Generate a realistic "Last-Modified" date.
+	lastModified := generatePastDate()
+
 	// Assemble headers that closely resemble a real Nginx response.
 	headers := fmt.Sprintf(
 		"HTTP/1.1 200 OK\r\n"+
@@ -43,13 +46,14 @@ func GetNginxResponse() []byte {
 			"Date: %s\r\n"+
 			"Content-Type: text/html\r\n"+
 			"Content-Length: %d\r\n"+
-			"Last-Modified: Tue, 01 Sep 2025 12:00:00 GMT\r\n"+
+			"Last-Modified: %s\r\n"+
 			"Connection: close\r\n"+
 			"ETag: \"5f4e3a9c-265\"\r\n"+
 			"Accept-Ranges: bytes\r\n"+
 			"\r\n",
 		date,
 		len(nginxHTMLBody),
+		lastModified,
 	)
 
 	// Combine headers and body to form the full response.
