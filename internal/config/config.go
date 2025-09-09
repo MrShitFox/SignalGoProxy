@@ -31,11 +31,19 @@ func New() *Config {
 	cfg := &Config{}
 
 	var domain, stealthMode, proxyURL string
+	var help bool
 
 	flag.StringVar(&domain, "domain", "", "Domain for the TLS certificate (required).")
 	flag.StringVar(&stealthMode, "stealth-mode", "nginx", "Stealth mode: 'none', 'nginx', 'apache', or 'proxy'.")
 	flag.StringVar(&proxyURL, "proxy-url", "", "Proxy URL for 'proxy' stealth mode.")
+	flag.BoolVar(&help, "help", false, "Show help message.")
+	flag.BoolVar(&help, "h", false, "Show help message (shorthand).")
 	flag.Parse()
+
+	if help {
+		flag.Usage()
+		os.Exit(0)
+	}
 
 	if domain == "" {
 		domain = os.Getenv("DOMAIN")
