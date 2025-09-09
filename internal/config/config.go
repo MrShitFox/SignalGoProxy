@@ -1,4 +1,4 @@
-// Package config отвечает за конфигурацию приложения.
+// Package config handles application configuration.
 package config
 
 import (
@@ -8,29 +8,28 @@ import (
 	"strings"
 )
 
-// StealthMode определяет режим маскировки.
+// StealthMode defines the stealth mode for camouflage.
 type StealthMode string
 
 const (
 	StealthNone   StealthMode = "none"
 	StealthNginx  StealthMode = "nginx"
-	StealthApache StealthMode = "apache" // <-- ДОБАВЛЯЕМ НОВЫЙ РЕЖИМ
+	StealthApache StealthMode = "apache"
 )
 
-// Config хранит все конфигурационные параметры.
+// Config stores all configuration parameters.
 type Config struct {
 	Domain      string
 	StealthMode StealthMode
 }
 
-// New создает новую конфигурацию, считывая флаги и переменные окружения.
+// New creates a new configuration by reading flags and environment variables.
 func New() *Config {
 	cfg := &Config{}
 
 	var domain, stealthMode string
 
 	flag.StringVar(&domain, "domain", "", "Domain for the TLS certificate (required).")
-	// Изменяем значение по умолчанию, чтобы показать все опции в --help
 	flag.StringVar(&stealthMode, "stealth-mode", "nginx", "Stealth mode: 'none', 'nginx', or 'apache'.")
 	flag.Parse()
 
@@ -46,7 +45,6 @@ func New() *Config {
 	}
 	cfg.Domain = domain
 
-	// --- ОБНОВЛЯЕМ ЛОГИКУ ВЫБОРА РЕЖИМА ---
 	switch strings.ToLower(stealthMode) {
 	case "nginx":
 		cfg.StealthMode = StealthNginx

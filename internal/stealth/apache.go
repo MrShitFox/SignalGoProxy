@@ -1,4 +1,4 @@
-// Package stealth предоставляет модули для маскировки под различные веб-серверы.
+// Package stealth provides modules for camouflaging the proxy as a standard web server.
 package stealth
 
 import (
@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Стандартная страница-заглушка Apache2 на Ubuntu
+// A standard Apache2 default page for Ubuntu.
 const apacheHTMLBody = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head>
@@ -38,7 +38,7 @@ const apacheHTMLBody = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitiona
   </body>
 </html>`
 
-// GetApacheResponse генерирует полный HTTP-ответ, имитирующий стандартный Apache.
+// GetApacheResponse generates a full HTTP response that mimics a standard Apache server.
 func GetApacheResponse() []byte {
 	date := time.Now().UTC().Format(time.RFC1123)
 

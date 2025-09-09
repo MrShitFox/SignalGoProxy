@@ -1,10 +1,10 @@
-// Package server управляет жизненным циклом TCP и HTTP серверов.
+// Package server manages the lifecycle of TCP and HTTP servers.
 package server
 
 import (
 	"context"
 	"crypto/tls"
-	"errors" // <-- ДОБАВЛЕН ЭТОТ ИМПОРТ
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -19,21 +19,21 @@ import (
 	"signalgoproxy/internal/proxy"
 )
 
-// Server - это наш главный серверный объект.
+// Server is the main server object.
 type Server struct {
 	cfg         *config.Config
 	httpServer  *http.Server
 	tlsListener net.Listener
 }
 
-// New создает новый экземпляр сервера.
+// New creates a new server instance.
 func New(cfg *config.Config) *Server {
 	return &Server{
 		cfg: cfg,
 	}
 }
 
-// Start запускает все необходимые слушатели и ожидает сигнала о завершении.
+// Start launches all necessary listeners and waits for a shutdown signal.
 func (s *Server) Start() {
 	log.Println("Stage 1: Initializing...")
 
@@ -48,20 +48,20 @@ func (s *Server) Start() {
 		NextProtos:     []string{"http/1.1", "acme-tls/1"},
 	}
 
-	// Создаем HTTP сервер для ACME challenge
+	// Create an HTTP server for the ACME challenge
 	s.httpServer = &http.Server{
 		Addr:    ":80",
 		Handler: certManager.HTTPHandler(nil),
 	}
 
-	// Создаем TLS слушатель
+	// Create a TLS listener
 	listener, err := tls.Listen("tcp", ":443", tlsConfig)
 	if err != nil {
 		log.Fatalf("Failed to listen on :443: %v", err)
 	}
 	s.tlsListener = listener
 
-	// --- Stage 2: Запуск ---
+	// --- Stage 2: Startup ---
 	log.Println("Stage 2: Starting services...")
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -82,7 +82,7 @@ func (s *Server) Start() {
 		log.Println("TLS proxy stopped.")
 	}()
 
-	// --- Stage 3: Ожидание завершения ---
+	// --- Stage 3: Running ---
 	log.Println("Stage 3: Running. Waiting for shutdown signal...")
 
 	quit := make(chan os.Signal, 1)
@@ -92,17 +92,17 @@ func (s *Server) Start() {
 	log.Println("Shutdown signal received...")
 	s.stop()
 
-	// Ждем, пока все горутины завершатся
+	// Wait for all goroutines to finish
 	wg.Wait()
 	log.Println("Server shut down gracefully.")
 }
 
-// acceptLoop принимает новые соединения и передает их обработчику.
+// acceptLoop accepts new connections and passes them to the handler.
 func (s *Server) acceptLoop() {
 	for {
 		conn, err := s.tlsListener.Accept()
 		if err != nil {
-			// Если ошибка - это результат закрытия слушателя, то это нормальный выход.
+			// If the error is due to the listener being closed, it's a clean exit.
 			if errors.Is(err, net.ErrClosed) {
 				break
 			}
@@ -113,19 +113,19 @@ func (s *Server) acceptLoop() {
 	}
 }
 
-// stop выполняет graceful shutdown.
+// stop performs a graceful shutdown.
 func (s *Server) stop() {
 	log.Println("Initiating graceful shutdown...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Сначала закрываем слушатель, чтобы перестать принимать новые соединения
+	// First, close the listener to stop accepting new connections
 	if err := s.tlsListener.Close(); err != nil {
 		log.Printf("Error closing TLS listener: %v", err)
 	}
 
-	// Затем останавливаем HTTP сервер
+	// Then, shut down the HTTP server
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		log.Printf("HTTP server shutdown error: %v", err)
 	}

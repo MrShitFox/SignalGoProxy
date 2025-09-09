@@ -14,11 +14,12 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/cryptobyte"
 	"signalgoproxy/internal/config"
 	"signalgoproxy/internal/stealth"
 )
 
-// Карта маршрутизации: SNI -> адрес сервера Signal
+// Routing map: SNI -> Signal server address.
 var signalUpstreams = map[string]string{
 	"chat.signal.org":         "chat.signal.org:443",
 	"ud-chat.signal.org":      "chat.signal.org:443",
@@ -35,7 +36,7 @@ var signalUpstreams = map[string]string{
 	"updates2.signal.org":     "updates2.signal.org:443",
 }
 
-// HandleConnection - главный обработчик входящих TLS-соединений.
+// HandleConnection is the main handler for incoming TLS connections.
 func HandleConnection(conn net.Conn, cfg *config.Config) {
 	defer conn.Close()
 
@@ -57,18 +58,18 @@ func HandleConnection(conn net.Conn, cfg *config.Config) {
 	}
 }
 
-// handleSignalProxy обрабатывает трафик для Signal.
+// handleSignalProxy handles traffic destined for Signal.
 func handleSignalProxy(reader io.Reader, clientConn net.Conn) {
-	innerHello, err := getInnerClientHelloInfo(reader)
+	serverName, rawClientHello, err := getSNI(reader)
 	if err != nil {
 		log.Printf("Failed to get inner SNI from %s: %v", clientConn.RemoteAddr(), err)
 		return
 	}
-	log.Printf("Inner SNI '%s' detected from %s", innerHello.ServerName, clientConn.RemoteAddr())
+	log.Printf("Inner SNI '%s' detected from %s", serverName, clientConn.RemoteAddr())
 
-	upstreamAddr, ok := signalUpstreams[strings.ToLower(innerHello.ServerName)]
+	upstreamAddr, ok := signalUpstreams[strings.ToLower(serverName)]
 	if !ok {
-		log.Printf("Denied connection for unknown inner SNI: %s", innerHello.ServerName)
+		log.Printf("Denied connection for unknown inner SNI: %s", serverName)
 		return
 	}
 
@@ -79,12 +80,12 @@ func handleSignalProxy(reader io.Reader, clientConn net.Conn) {
 	}
 	defer upstreamConn.Close()
 
-	if _, err = upstreamConn.Write(innerHello.Raw); err != nil {
+	if _, err = upstreamConn.Write(rawClientHello); err != nil {
 		log.Printf("Failed to write inner ClientHello to upstream: %v", err)
 		return
 	}
 
-	log.Printf("Proxying traffic for %s to %s", innerHello.ServerName, upstreamAddr)
+	log.Printf("Proxying traffic for %s to %s", serverName, upstreamAddr)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -103,10 +104,10 @@ func handleSignalProxy(reader io.Reader, clientConn net.Conn) {
 		}
 	}()
 	wg.Wait()
-	log.Printf("Connection for %s closed", innerHello.ServerName)
+	log.Printf("Connection for %s closed", serverName)
 }
 
-// handleStealth отвечает на HTTP-запросы заглушкой для маскировки.
+// handleStealth responds to HTTP requests with a stealth page to provide camouflage.
 func handleStealth(conn net.Conn, cfg *config.Config) {
 	var response []byte
 
@@ -118,10 +119,10 @@ func handleStealth(conn net.Conn, cfg *config.Config) {
 		log.Printf("Stealth mode: Serving full fake Apache page to %s", conn.RemoteAddr())
 		response = stealth.GetApacheResponse()
 	case config.StealthNone:
-		// В режиме "none" просто закрываем соединение
+		// In "none" mode, just close the connection.
 		return
 	default:
-		// На случай, если будет добавлена новая маскировка, а сюда не добавлена
+		// Fallback for an unknown stealth mode.
 		log.Printf("Unknown stealth mode '%s', closing connection.", cfg.StealthMode)
 		return
 	}
@@ -132,74 +133,102 @@ func handleStealth(conn net.Conn, cfg *config.Config) {
 	}
 }
 
-
-// clientHelloInfo содержит информацию, извлеченную из ClientHello
-type clientHelloInfo struct {
-	Raw        []byte
-	ServerName string
-}
-
-// fakeConn - это обертка для симуляции сетевого соединения для парсера tls
-type fakeConn struct {
-	*bytes.Buffer
-}
-
-func (c *fakeConn) Close() error                     { return nil }
-func (c *fakeConn) LocalAddr() net.Addr              { return nil }
-func (c *fakeConn) RemoteAddr() net.Addr             { return nil }
-func (c *fakeConn) SetDeadline(t time.Time) error    { return nil }
-func (c *fakeConn) SetReadDeadline(t time.Time) error  { return nil }
-func (c *fakeConn) SetWriteDeadline(t time.Time) error { return nil }
-func newFakeConn(data []byte) *fakeConn {
-	return &fakeConn{Buffer: bytes.NewBuffer(data)}
-}
-
-// getInnerClientHelloInfo читает из соединения и парсит ClientHello для извлечения SNI
-func getInnerClientHelloInfo(reader io.Reader) (*clientHelloInfo, error) {
+// getSNI reads from the connection, parses the TLS ClientHello message,
+// and extracts the Server Name Indication (SNI) extension.
+// It returns the found server name, the raw ClientHello bytes, and any error.
+// This implementation uses cryptobyte for robust and efficient parsing.
+func getSNI(reader io.Reader) (string, []byte, error) {
+	// Read the TLS record header.
 	header := make([]byte, 5)
 	if _, err := io.ReadFull(reader, header); err != nil {
-		return nil, err
+		return "", nil, fmt.Errorf("failed to read TLS record header: %w", err)
 	}
 
-	if header[0] != 0x16 { // TLS Handshake
-		return nil, errors.New("not a TLS handshake record")
+	// Check if it's a TLS handshake record.
+	if header[0] != 0x16 { // 0x16 = Handshake
+		return "", nil, errors.New("not a TLS handshake record")
 	}
 
+	// Read the rest of the record.
 	recordLen := int(binary.BigEndian.Uint16(header[3:]))
-
 	recordBody := make([]byte, recordLen)
 	if _, err := io.ReadFull(reader, recordBody); err != nil {
-		return nil, err
-	}
-
-	if len(recordBody) < 1 || recordBody[0] != 0x01 { // ClientHello
-		return nil, errors.New("not a ClientHello message")
+		return "", nil, fmt.Errorf("failed to read TLS record body: %w", err)
 	}
 
 	fullRecord := append(header, recordBody...)
 
-	var serverName string
+	// Wrap the record body in a cryptobyte.String for parsing.
+	s := cryptobyte.String(recordBody)
 
-	config := &tls.Config{
-		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
-			serverName = hello.ServerName
-			return nil, fmt.Errorf("extracting SNI")
-		},
+	// Parse the ClientHello message.
+	// See RFC 8446, Section 4.1.2.
+	var msgType uint8
+	var clientHello cryptobyte.String
+	if !s.ReadUint8(&msgType) || msgType != 1 || !s.ReadUint24LengthPrefixed(&clientHello) { // 1 = ClientHello
+		return "", nil, errors.New("not a ClientHello message")
 	}
 
-	tlsConn := tls.Server(newFakeConn(fullRecord), config)
-	err := tlsConn.Handshake()
+	// Skip legacy version and random.
+	if !clientHello.Skip(2) || !clientHello.Skip(32) {
+		return "", nil, errors.New("error parsing ClientHello header")
+	}
 
-	if err != nil && !strings.Contains(err.Error(), "extracting SNI") {
-		return nil, err
+	// Skip legacy session id.
+	if !clientHello.Skip(1) {
+		return "", nil, errors.New("error parsing session id")
+	}
+
+	// Skip cipher suites.
+	var cipherSuites cryptobyte.String
+	if !clientHello.ReadUint16LengthPrefixed(&cipherSuites) {
+		return "", nil, errors.New("error parsing cipher suites")
+	}
+
+	// Skip compression methods.
+	var compressionMethods cryptobyte.String
+	if !clientHello.ReadUint8LengthPrefixed(&compressionMethods) {
+		return "", nil, errors.New("error parsing compression methods")
+	}
+
+	// Check for extensions.
+	if clientHello.Empty() {
+		return "", nil, errors.New("no extensions found")
+	}
+
+	// Parse extensions.
+	var extensions cryptobyte.String
+	if !clientHello.ReadUint16LengthPrefixed(&extensions) {
+		return "", nil, errors.New("error parsing extensions")
+	}
+
+	var serverName string
+	for !extensions.Empty() {
+		var extType uint16
+		var extData cryptobyte.String
+		if !extensions.ReadUint16(&extType) || !extensions.ReadUint16LengthPrefixed(&extData) {
+			return "", nil, errors.New("error parsing extension")
+		}
+
+		if extType == 0 { // 0 = server_name
+			var serverNameList cryptobyte.String
+			if !extData.ReadUint16LengthPrefixed(&serverNameList) || serverNameList.Empty() {
+				return "", nil, errors.New("error parsing server_name extension")
+			}
+
+			var nameType uint8
+			var hostName cryptobyte.String
+			if !serverNameList.ReadUint8(&nameType) || nameType != 0 || !serverNameList.ReadUint16LengthPrefixed(&hostName) || hostName.Empty() { // 0 = host_name
+				return "", nil, errors.New("error parsing host_name")
+			}
+			serverName = string(hostName)
+			break // Found it
+		}
 	}
 
 	if serverName == "" {
-		return nil, errors.New("SNI not found in inner ClientHello")
+		return "", nil, errors.New("SNI not found in ClientHello")
 	}
 
-	return &clientHelloInfo{
-		Raw:        fullRecord,
-		ServerName: serverName,
-	}, nil
+	return serverName, fullRecord, nil
 }
