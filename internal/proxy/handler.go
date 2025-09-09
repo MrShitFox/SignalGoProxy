@@ -61,7 +61,7 @@ func HandleConnection(conn net.Conn, cfg *config.Config) {
 	case ProtoSignalTLS:
 		handleSignalProxy(bufReader, conn)
 	case ProtoHTTP:
-		handleStealth(conn, cfg)
+		handleStealth(bufReader, conn, cfg)
 	default:
 		log.Printf("Unknown protocol from %s, closing connection.", conn.RemoteAddr())
 	}
@@ -124,7 +124,7 @@ func handleSignalProxy(reader io.Reader, clientConn net.Conn) {
 }
 
 // handleStealth responds to HTTP requests with a stealth page to provide camouflage.
-func handleStealth(conn net.Conn, cfg *config.Config) {
+func handleStealth(clientReader *bufio.Reader, conn net.Conn, cfg *config.Config) {
 	var response []byte
 
 	switch cfg.StealthMode {
@@ -136,7 +136,7 @@ func handleStealth(conn net.Conn, cfg *config.Config) {
 		response = stealth.GetApacheResponse()
 	case config.StealthProxy:
 		log.Printf("Stealth mode: Proxying to %s for %s", cfg.ProxyURL, conn.RemoteAddr())
-		stealth.ProxyRequest(conn, cfg.ProxyURL)
+		stealth.ProxyRequest(clientReader, conn, cfg.ProxyURL)
 		return
 	case config.StealthNone:
 		// In "none" mode, just close the connection.

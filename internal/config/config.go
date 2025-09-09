@@ -4,6 +4,7 @@ package config
 import (
 	"flag"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -61,6 +62,13 @@ func New() *Config {
 		cfg.StealthMode = StealthProxy
 		if proxyURL == "" {
 			log.Fatal("Proxy URL is required for 'proxy' stealth mode. Set it with -proxy-url or PROXY_URL.")
+		}
+		u, err := url.Parse(proxyURL)
+		if err != nil {
+			log.Fatalf("Invalid proxy URL: %v", err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			log.Fatal("Proxy URL must have a scheme of 'http' or 'https'.")
 		}
 	case "none":
 		cfg.StealthMode = StealthNone
