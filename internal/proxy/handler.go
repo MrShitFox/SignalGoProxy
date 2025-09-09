@@ -18,6 +18,16 @@ import (
 	"signalgoproxy/internal/stealth"
 )
 
+// Create a buffer pool with a larger buffer size for better performance.
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		// Using 64KB buffers, which can be tuned.
+		// This is larger than the default 32KB in io.Copy.
+		b := make([]byte, 64*1024)
+		return &b
+	},
+}
+
 // Routing map: SNI -> Signal server address.
 var signalUpstreams = map[string]string{
 	"chat.signal.org":         "chat.signal.org:443",
@@ -88,20 +98,27 @@ func handleSignalProxy(reader io.Reader, clientConn net.Conn) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
+
 	go func() {
 		defer wg.Done()
-		io.Copy(upstreamConn, clientConn)
+		bufPtr := bufferPool.Get().(*[]byte)
+		defer bufferPool.Put(bufPtr)
+		io.CopyBuffer(upstreamConn, clientConn, *bufPtr)
 		if tcpConn, ok := upstreamConn.(*net.TCPConn); ok {
 			tcpConn.CloseWrite()
 		}
 	}()
+
 	go func() {
 		defer wg.Done()
-		io.Copy(clientConn, upstreamConn)
+		bufPtr := bufferPool.Get().(*[]byte)
+		defer bufferPool.Put(bufPtr)
+		io.CopyBuffer(clientConn, upstreamConn, *bufPtr)
 		if tlsConn, ok := clientConn.(*tls.Conn); ok {
 			tlsConn.CloseWrite()
 		}
 	}()
+
 	wg.Wait()
 	log.Printf("Connection for %s closed", serverName)
 }
