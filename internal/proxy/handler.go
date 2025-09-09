@@ -191,7 +191,8 @@ func getSNI(reader io.Reader) (string, []byte, error) {
 	}
 
 	// Skip legacy session id.
-	if !clientHello.Skip(1) {
+	var legacySessionID cryptobyte.String
+	if !clientHello.ReadUint8LengthPrefixed(&legacySessionID) {
 		return "", nil, errors.New("error parsing session id")
 	}
 
