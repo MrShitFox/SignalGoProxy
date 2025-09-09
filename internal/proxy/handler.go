@@ -15,28 +15,11 @@ import (
 	"time"
 
 	"signalgoproxy/internal/config"
+	"signalgoproxy/internal/stealth"
 )
 
-// ... (структуры clientHelloInfo и fakeConn и функция newFakeConn остаются такими же, как в предыдущем примере)
-type clientHelloInfo struct {
-	Raw        []byte
-	ServerName string
-}
-
-type fakeConn struct {
-	*bytes.Buffer
-}
-func (c *fakeConn) Close() error                     { return nil }
-func (c *fakeConn) LocalAddr() net.Addr              { return nil }
-func (c *fakeConn) RemoteAddr() net.Addr             { return nil }
-func (c *fakeConn) SetDeadline(t time.Time) error    { return nil }
-func (c *fakeConn) SetReadDeadline(t time.Time) error  { return nil }
-func (c *fakeConn) SetWriteDeadline(t time.Time) error { return nil }
-func newFakeConn(data []byte) *fakeConn {
-	return &fakeConn{Buffer: bytes.NewBuffer(data)}
-}
-
-// Карта маршрутизации Signal.
+// --- THIS MAP WAS MISSING ---
+// signalUpstreams defines the routing from the requested SNI to the actual Signal server address.
 var signalUpstreams = map[string]string{
 	"chat.signal.org":         "chat.signal.org:443",
 	"ud-chat.signal.org":      "chat.signal.org:443",
@@ -52,12 +35,12 @@ var signalUpstreams = map[string]string{
 	"updates.signal.org":      "updates.signal.org:443",
 	"updates2.signal.org":     "updates2.signal.org:443",
 }
+// -----------------------------
 
-// HandleConnection - главный обработчик входящих TLS-соединений.
+// HandleConnection is the main handler for incoming TLS connections.
 func HandleConnection(conn net.Conn, cfg *config.Config) {
 	defer conn.Close()
 
-	// Оборачиваем соединение в bufio.Reader для использования Peek()
 	bufReader := bufio.NewReader(conn)
 
 	protocol, _, err := sniffProtocol(bufReader)
@@ -76,14 +59,13 @@ func HandleConnection(conn net.Conn, cfg *config.Config) {
 	}
 }
 
-// handleSignalProxy обрабатывает трафик для Signal.
+// handleSignalProxy processes traffic intended for Signal.
 func handleSignalProxy(reader io.Reader, clientConn net.Conn) {
 	innerHello, err := getInnerClientHelloInfo(reader)
 	if err != nil {
 		log.Printf("Failed to get inner SNI from %s: %v", clientConn.RemoteAddr(), err)
 		return
 	}
-
 	log.Printf("Inner SNI '%s' detected from %s", innerHello.ServerName, clientConn.RemoteAddr())
 
 	upstreamAddr, ok := signalUpstreams[strings.ToLower(innerHello.ServerName)]
@@ -99,7 +81,6 @@ func handleSignalProxy(reader io.Reader, clientConn net.Conn) {
 	}
 	defer upstreamConn.Close()
 
-	// Сначала отправляем уже прочитанный ClientHello
 	if _, err = upstreamConn.Write(innerHello.Raw); err != nil {
 		log.Printf("Failed to write inner ClientHello to upstream: %v", err)
 		return
@@ -107,10 +88,8 @@ func handleSignalProxy(reader io.Reader, clientConn net.Conn) {
 
 	log.Printf("Proxying traffic for %s to %s", innerHello.ServerName, upstreamAddr)
 
-	// Копируем данные в обе стороны
 	var wg sync.WaitGroup
 	wg.Add(2)
-
 	go func() {
 		defer wg.Done()
 		io.Copy(upstreamConn, clientConn)
@@ -125,32 +104,47 @@ func handleSignalProxy(reader io.Reader, clientConn net.Conn) {
 			tlsConn.CloseWrite()
 		}
 	}()
-
 	wg.Wait()
 	log.Printf("Connection for %s closed", innerHello.ServerName)
 }
 
-// handleStealth отвечает на HTTP-запросы заглушкой для маскировки.
+// handleStealth responds to HTTP requests with a decoy page for masquerading.
 func handleStealth(conn net.Conn, cfg *config.Config) {
-	log.Printf("Stealth mode: Serving fake Nginx page to %s", conn.RemoteAddr())
-	
-	response := "HTTP/1.1 200 OK\r\n" +
-		"Server: nginx/1.21.3\r\n" +
-		"Content-Type: text/html\r\n" +
-		"Content-Length: 151\r\n" +
-		"Connection: close\r\n" +
-		"\r\n" +
-		"<!DOCTYPE html>\n<html>\n<head>\n<title>Welcome to nginx!</title>\n</head>\n<body>\n<p><em>Thank you for using nginx.</em></p>\n</body>\n</html>"
+	var response []byte
 
-	_, err := conn.Write([]byte(response))
+	switch cfg.StealthMode {
+	case config.StealthNginx:
+		log.Printf("Stealth mode: Serving full fake Nginx page to %s", conn.RemoteAddr())
+		response = stealth.GetNginxResponse()
+	case config.StealthNone:
+		// In "none" mode, we simply close the connection
+		return
+	default:
+		// Should not happen due to config validation, but as a fallback
+		log.Printf("Unknown stealth mode '%s', closing connection.", cfg.StealthMode)
+		return
+	}
+
+	_, err := conn.Write(response)
 	if err != nil {
 		log.Printf("Error writing stealth response: %v", err)
 	}
 }
 
-// getInnerClientHelloInfo парсит внутренний ClientHello.
+// ... (The rest of the file: getInnerClientHelloInfo, fakeConn, etc. remains unchanged) ...
+type clientHelloInfo struct {
+	Raw        []byte
+	ServerName string
+}
+type fakeConn struct{ *bytes.Buffer }
+func (c *fakeConn) Close() error                     { return nil }
+func (c *fakeConn) LocalAddr() net.Addr              { return nil }
+func (c *fakeConn) RemoteAddr() net.Addr             { return nil }
+func (c *fakeConn) SetDeadline(t time.Time) error    { return nil }
+func (c *fakeConn) SetReadDeadline(t time.Time) error  { return nil }
+func (c *fakeConn) SetWriteDeadline(t time.Time) error { return nil }
+func newFakeConn(data []byte) *fakeConn              { return &fakeConn{Buffer: bytes.NewBuffer(data)} }
 func getInnerClientHelloInfo(reader io.Reader) (*clientHelloInfo, error) {
-	// Эта функция остается такой же, как в последнем рабочем варианте
 	header := make([]byte, 5)
 	if _, err := io.ReadFull(reader, header); err != nil {
 		return nil, err
