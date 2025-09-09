@@ -7,72 +7,64 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"sync"
 )
 
 // ProxyRequest forwards the client's request to a specified proxy URL and streams the response.
 func ProxyRequest(clientConn net.Conn, proxyURL string) {
-	// Ensure the client connection is closed when the function exits.
 	defer clientConn.Close()
-
-	// Parse the provided proxy URL to extract the host.
-	parsedURL, err := url.Parse(proxyURL)
-	if err != nil {
-		log.Printf("Error parsing proxy URL '%s': %v", proxyURL, err)
-		return
-	}
-	host := parsedURL.Host
-	if parsedURL.Port() == "" {
-		host = net.JoinHostPort(host, "443")
-	}
-
-	// Establish a connection to the proxy destination.
-	destConn, err := net.Dial("tcp", host)
-	if err != nil {
-		log.Printf("Error connecting to proxy host '%s': %v", host, err)
-		return
-	}
-	defer destConn.Close()
 
 	// Read the full initial request from the client.
 	clientReader := bufio.NewReader(clientConn)
 	req, err := http.ReadRequest(clientReader)
 	if err != nil {
-		log.Printf("Error reading request from client: %v", err)
+		// This can happen if the client disconnects, it's not always a server error.
+		if err != io.EOF {
+			log.Printf("Error reading request from client: %v", err)
+		}
 		return
 	}
 
-	// Forward the initial request to the destination server.
-	if err := req.Write(destConn); err != nil {
-		log.Printf("Error writing request to destination: %v", err)
+	// Parse the target proxy URL.
+	targetURL, err := url.Parse(proxyURL)
+	if err != nil {
+		log.Printf("Error parsing proxy URL '%s': %v", proxyURL, err)
+		// Inform the client of the error.
+		resp := &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Body:       http.NoBody,
+		}
+		resp.Write(clientConn)
 		return
 	}
 
-	log.Printf("Proxying request to %s", host)
+	// Create a new request to the target.
+	// Copy over the essential parts of the original request.
+	outReq := &http.Request{
+		Method: req.Method,
+		URL:    targetURL,
+		Header: req.Header,
+		Body:   req.Body,
+	}
+	// The Host header is implicitly set by the http.Client when it makes the request.
+	// We can also set it explicitly if needed: outReq.Host = targetURL.Host
 
-	// Use a WaitGroup to wait for both directions of the proxy to complete.
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// Goroutine to copy data from the client to the destination.
-	go func() {
-		defer wg.Done()
-		io.Copy(destConn, clientConn)
-		if tcpConn, ok := destConn.(*net.TCPConn); ok {
-			tcpConn.CloseWrite()
+	// Execute the request using the default HTTP client.
+	// DefaultClient handles HTTPS and certificate validation.
+	log.Printf("Proxying request for %s to %s", req.RemoteAddr, targetURL)
+	resp, err := http.DefaultClient.Do(outReq)
+	if err != nil {
+		log.Printf("Error forwarding request to proxy target '%s': %v", targetURL, err)
+		resp := &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Body:       http.NoBody,
 		}
-	}()
+		resp.Write(clientConn)
+		return
+	}
+	defer resp.Body.Close()
 
-	// Goroutine to copy data from the destination back to the client.
-	go func() {
-		defer wg.Done()
-		io.Copy(clientConn, destConn)
-		if tcpConn, ok := clientConn.(*net.TCPConn); ok {
-			tcpConn.CloseWrite()
-		}
-	}()
-
-	// Wait for both copy operations to finish.
-	wg.Wait()
-	log.Printf("Proxy connection to %s closed", host)
+	// Write the response from the target back to the client.
+	if err := resp.Write(clientConn); err != nil {
+		log.Printf("Error writing proxy response to client: %v", err)
+	}
 }

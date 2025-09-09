@@ -6,90 +6,62 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestProxyRequest(t *testing.T) {
 	// 1. Create a mock destination server
-	destListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to create destination listener: %v", err)
-	}
-	defer destListener.Close()
-	destAddr := destListener.Addr().String()
+	mockDestServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "Hello, World")
+	}))
+	defer mockDestServer.Close()
 
+	// 2. Create a mock client connection using a pipe
+	clientConn, serverConn := net.Pipe()
+
+	// 3. Run ProxyRequest in a goroutine with the server side of the pipe
 	var wg sync.WaitGroup
 	wg.Add(1)
-
 	go func() {
 		defer wg.Done()
-		destConn, err := destListener.Accept()
-		if err != nil {
-			t.Errorf("Destination failed to accept connection: %v", err)
-			return
-		}
-		defer destConn.Close()
-
-		// Read the request from the proxy
-		_, err = http.ReadRequest(bufio.NewReader(destConn))
-		if err != nil {
-			t.Errorf("Destination failed to read request: %v", err)
-			return
-		}
-
-		// Write a response
-		response := "HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nHello, World"
-		if _, err := destConn.Write([]byte(response)); err != nil {
-			t.Errorf("Destination failed to write response: %v", err)
-		}
+		ProxyRequest(serverConn, mockDestServer.URL)
 	}()
 
-	// 2. Create a mock client listener
-	clientListener, err := net.Listen("tcp", "127.0.0.1:0")
+	// 4. Write a sample HTTP request to the client side of the pipe
+	req, err := http.NewRequest("GET", "/", nil)
 	if err != nil {
-		t.Fatalf("Failed to create client listener: %v", err)
+		t.Fatalf("Failed to create request: %v", err)
 	}
-	defer clientListener.Close()
-	clientAddr := clientListener.Addr().String()
+	if err := req.Write(clientConn); err != nil {
+		t.Fatalf("Failed to write request to pipe: %v", err)
+	}
 
-	// 3. Run ProxyRequest in a goroutine
-	go func() {
-		clientConn, err := clientListener.Accept()
-		if err != nil {
-			t.Errorf("Proxy failed to accept client connection: %v", err)
-			return
-		}
-		ProxyRequest(clientConn, fmt.Sprintf("http://%s", destAddr))
-	}()
-
-	// 4. Mock client connects to the proxy
-	proxyConn, err := net.Dial("tcp", clientAddr)
+	// 5. Read the response from the client side of the pipe
+	resp, err := http.ReadResponse(bufio.NewReader(clientConn), req)
 	if err != nil {
-		t.Fatalf("Client failed to connect to proxy: %v", err)
+		t.Fatalf("Failed to read response from pipe: %v", err)
 	}
-	defer proxyConn.Close()
+	defer resp.Body.Close()
 
-	// 5. Send a request from the client to the proxy
-	request := "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
-	if _, err := proxyConn.Write([]byte(request)); err != nil {
-		t.Fatalf("Client failed to write request: %v", err)
+	// 6. Verify the response
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status code %d, but got %d", http.StatusOK, resp.StatusCode)
 	}
 
-	// 6. Read the response from the proxy
-	proxyConn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	response, err := ioutil.ReadAll(proxyConn)
+	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("Client failed to read response: %v", err)
+		t.Fatalf("Failed to read response body: %v", err)
 	}
 
-	// 7. Verify the response
-	expectedResponse := "Hello, World"
-	if !strings.Contains(string(response), expectedResponse) {
-		t.Errorf("Expected response to contain '%s', but got '%s'", expectedResponse, string(response))
+	expectedBody := "Hello, World"
+	if !strings.Contains(string(body), expectedBody) {
+		t.Errorf("Expected response body to contain '%s', but got '%s'", expectedBody, string(body))
 	}
 
+	// Clean up
+	clientConn.Close()
 	wg.Wait()
 }
