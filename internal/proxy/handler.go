@@ -18,8 +18,7 @@ import (
 	"signalgoproxy/internal/stealth"
 )
 
-// --- THIS MAP WAS MISSING ---
-// signalUpstreams defines the routing from the requested SNI to the actual Signal server address.
+// Карта маршрутизации: SNI -> адрес сервера Signal
 var signalUpstreams = map[string]string{
 	"chat.signal.org":         "chat.signal.org:443",
 	"ud-chat.signal.org":      "chat.signal.org:443",
@@ -35,9 +34,8 @@ var signalUpstreams = map[string]string{
 	"updates.signal.org":      "updates.signal.org:443",
 	"updates2.signal.org":     "updates2.signal.org:443",
 }
-// -----------------------------
 
-// HandleConnection is the main handler for incoming TLS connections.
+// HandleConnection - главный обработчик входящих TLS-соединений.
 func HandleConnection(conn net.Conn, cfg *config.Config) {
 	defer conn.Close()
 
@@ -59,7 +57,7 @@ func HandleConnection(conn net.Conn, cfg *config.Config) {
 	}
 }
 
-// handleSignalProxy processes traffic intended for Signal.
+// handleSignalProxy обрабатывает трафик для Signal.
 func handleSignalProxy(reader io.Reader, clientConn net.Conn) {
 	innerHello, err := getInnerClientHelloInfo(reader)
 	if err != nil {
@@ -108,7 +106,7 @@ func handleSignalProxy(reader io.Reader, clientConn net.Conn) {
 	log.Printf("Connection for %s closed", innerHello.ServerName)
 }
 
-// handleStealth responds to HTTP requests with a decoy page for masquerading.
+// handleStealth отвечает на HTTP-запросы заглушкой для маскировки.
 func handleStealth(conn net.Conn, cfg *config.Config) {
 	var response []byte
 
@@ -116,11 +114,14 @@ func handleStealth(conn net.Conn, cfg *config.Config) {
 	case config.StealthNginx:
 		log.Printf("Stealth mode: Serving full fake Nginx page to %s", conn.RemoteAddr())
 		response = stealth.GetNginxResponse()
+	case config.StealthApache:
+		log.Printf("Stealth mode: Serving full fake Apache page to %s", conn.RemoteAddr())
+		response = stealth.GetApacheResponse()
 	case config.StealthNone:
-		// In "none" mode, we simply close the connection
+		// В режиме "none" просто закрываем соединение
 		return
 	default:
-		// Should not happen due to config validation, but as a fallback
+		// На случай, если будет добавлена новая маскировка, а сюда не добавлена
 		log.Printf("Unknown stealth mode '%s', closing connection.", cfg.StealthMode)
 		return
 	}
@@ -131,51 +132,72 @@ func handleStealth(conn net.Conn, cfg *config.Config) {
 	}
 }
 
-// ... (The rest of the file: getInnerClientHelloInfo, fakeConn, etc. remains unchanged) ...
+
+// clientHelloInfo содержит информацию, извлеченную из ClientHello
 type clientHelloInfo struct {
 	Raw        []byte
 	ServerName string
 }
-type fakeConn struct{ *bytes.Buffer }
+
+// fakeConn - это обертка для симуляции сетевого соединения для парсера tls
+type fakeConn struct {
+	*bytes.Buffer
+}
+
 func (c *fakeConn) Close() error                     { return nil }
 func (c *fakeConn) LocalAddr() net.Addr              { return nil }
 func (c *fakeConn) RemoteAddr() net.Addr             { return nil }
 func (c *fakeConn) SetDeadline(t time.Time) error    { return nil }
 func (c *fakeConn) SetReadDeadline(t time.Time) error  { return nil }
 func (c *fakeConn) SetWriteDeadline(t time.Time) error { return nil }
-func newFakeConn(data []byte) *fakeConn              { return &fakeConn{Buffer: bytes.NewBuffer(data)} }
+func newFakeConn(data []byte) *fakeConn {
+	return &fakeConn{Buffer: bytes.NewBuffer(data)}
+}
+
+// getInnerClientHelloInfo читает из соединения и парсит ClientHello для извлечения SNI
 func getInnerClientHelloInfo(reader io.Reader) (*clientHelloInfo, error) {
 	header := make([]byte, 5)
 	if _, err := io.ReadFull(reader, header); err != nil {
 		return nil, err
 	}
-	if header[0] != 0x16 {
+
+	if header[0] != 0x16 { // TLS Handshake
 		return nil, errors.New("not a TLS handshake record")
 	}
+
 	recordLen := int(binary.BigEndian.Uint16(header[3:]))
+
 	recordBody := make([]byte, recordLen)
 	if _, err := io.ReadFull(reader, recordBody); err != nil {
 		return nil, err
 	}
-	if len(recordBody) < 1 || recordBody[0] != 0x01 {
+
+	if len(recordBody) < 1 || recordBody[0] != 0x01 { // ClientHello
 		return nil, errors.New("not a ClientHello message")
 	}
+
 	fullRecord := append(header, recordBody...)
+
 	var serverName string
+
 	config := &tls.Config{
 		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 			serverName = hello.ServerName
 			return nil, fmt.Errorf("extracting SNI")
 		},
 	}
+
 	tlsConn := tls.Server(newFakeConn(fullRecord), config)
 	err := tlsConn.Handshake()
+
 	if err != nil && !strings.Contains(err.Error(), "extracting SNI") {
 		return nil, err
 	}
+
 	if serverName == "" {
 		return nil, errors.New("SNI not found in inner ClientHello")
 	}
+
 	return &clientHelloInfo{
 		Raw:        fullRecord,
 		ServerName: serverName,
