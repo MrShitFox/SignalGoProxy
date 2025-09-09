@@ -4,7 +4,6 @@ package proxy
 import (
 	"bufio"
 	"io"
-	"net/http"
 	"strings"
 )
 
