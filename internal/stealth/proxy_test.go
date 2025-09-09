@@ -27,7 +27,7 @@ func TestProxyRequest(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ProxyRequest(serverConn, mockDestServer.URL)
+		ProxyRequest(bufio.NewReader(serverConn), serverConn, mockDestServer.URL)
 	}()
 
 	// 4. Write a sample HTTP request to the client side of the pipe

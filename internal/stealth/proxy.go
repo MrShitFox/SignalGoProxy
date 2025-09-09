@@ -10,11 +10,10 @@ import (
 )
 
 // ProxyRequest forwards the client's request to a specified proxy URL and streams the response.
-func ProxyRequest(clientConn net.Conn, proxyURL string) {
+func ProxyRequest(clientReader *bufio.Reader, clientConn net.Conn, proxyURL string) {
 	defer clientConn.Close()
 
 	// Read the full initial request from the client.
-	clientReader := bufio.NewReader(clientConn)
 	req, err := http.ReadRequest(clientReader)
 	if err != nil {
 		// This can happen if the client disconnects, it's not always a server error.
