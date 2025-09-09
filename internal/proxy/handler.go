@@ -134,6 +134,10 @@ func handleStealth(conn net.Conn, cfg *config.Config) {
 	case config.StealthApache:
 		log.Printf("Stealth mode: Serving full fake Apache page to %s", conn.RemoteAddr())
 		response = stealth.GetApacheResponse()
+	case config.StealthProxy:
+		log.Printf("Stealth mode: Proxying to %s for %s", cfg.ProxyURL, conn.RemoteAddr())
+		stealth.ProxyRequest(conn, cfg.ProxyURL)
+		return
 	case config.StealthNone:
 		// In "none" mode, just close the connection.
 		return
