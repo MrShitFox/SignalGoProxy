@@ -3,6 +3,7 @@ package proxy
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"strings"
 )
@@ -24,10 +25,20 @@ func sniffProtocol(reader *bufio.Reader) (Protocol, []byte, error) {
 	// and the TLS handshake byte.
 	peekedBytes, err := reader.Peek(8)
 	if err != nil {
-		// If we can't even peek a few bytes, it might be an EOF or a real error.
-		if err == io.EOF {
-			return ProtoUnknown, nil, nil // Connection closed before sending data.
+		// If the error is EOF or UnexpectedEOF, it means the client sent
+		// less data than we wanted to peek. This is not a fatal error;
+		// we just might not be able to determine the protocol.
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			// Try to identify based on what we did get.
+			if len(peekedBytes) > 0 {
+				if peekedBytes[0] == 0x16 {
+					return ProtoSignalTLS, nil, nil
+				}
+				// Not enough data for a reliable HTTP check, so we'll fall through.
+			}
+			return ProtoUnknown, nil, nil // Not enough data to determine.
 		}
+		// Any other error is a real problem.
 		return ProtoUnknown, nil, err
 	}
 

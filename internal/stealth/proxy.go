@@ -2,6 +2,7 @@ package stealth
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -16,7 +17,6 @@ func ProxyRequest(clientReader *bufio.Reader, clientConn net.Conn, proxyURL stri
 	// Read the full initial request from the client.
 	req, err := http.ReadRequest(clientReader)
 	if err != nil {
-		// This can happen if the client disconnects, it's not always a server error.
 		if err != io.EOF {
 			log.Printf("Error reading request from client: %v", err)
 		}
@@ -27,37 +27,29 @@ func ProxyRequest(clientReader *bufio.Reader, clientConn net.Conn, proxyURL stri
 	targetURL, err := url.Parse(proxyURL)
 	if err != nil {
 		log.Printf("Error parsing proxy URL '%s': %v", proxyURL, err)
-		// Inform the client of the error.
-		resp := &http.Response{
-			StatusCode: http.StatusInternalServerError,
-			Body:       http.NoBody,
-		}
-		resp.Write(clientConn)
+		// Manually write a simple 500 error response.
+		errorResponse := "HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\n\r\n"
+		clientConn.Write([]byte(errorResponse))
 		return
 	}
 
 	// Create a new request to the target.
-	// Copy over the essential parts of the original request.
 	outReq := &http.Request{
 		Method: req.Method,
 		URL:    targetURL,
 		Header: req.Header,
 		Body:   req.Body,
 	}
-	// The Host header is implicitly set by the http.Client when it makes the request.
-	// We can also set it explicitly if needed: outReq.Host = targetURL.Host
 
 	// Execute the request using the default HTTP client.
-	// DefaultClient handles HTTPS and certificate validation.
 	log.Printf("Proxying request for %s to %s", req.RemoteAddr, targetURL)
 	resp, err := http.DefaultClient.Do(outReq)
 	if err != nil {
 		log.Printf("Error forwarding request to proxy target '%s': %v", targetURL, err)
-		resp := &http.Response{
-			StatusCode: http.StatusBadGateway,
-			Body:       http.NoBody,
-		}
-		resp.Write(clientConn)
+		// Manually write a simple 502 error response. This is more reliable
+		// than http.Response.Write for simple, bodiless error responses.
+		errorResponse := fmt.Sprintf("HTTP/1.0 %d %s\r\nConnection: close\r\n\r\n", http.StatusBadGateway, http.StatusText(http.StatusBadGateway))
+		clientConn.Write([]byte(errorResponse))
 		return
 	}
 	defer resp.Body.Close()
