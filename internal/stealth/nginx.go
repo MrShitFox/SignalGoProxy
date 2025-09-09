@@ -31,12 +31,12 @@ Commercial support is available at
 </body>
 </html>`
 
-// GetNginxResponse генерирует полный HTTP-ответ, имитирующий стандартный Nginx.
+// GetNginxResponse generates a full HTTP response that mimics a standard Nginx server.
 func GetNginxResponse() []byte {
-	// Форматируем текущую дату в стандартный для HTTP заголовок GMT
+	// Format the current date into the standard GMT format for HTTP headers.
 	date := time.Now().UTC().Format(time.RFC1123)
-	
-	// Собираем заголовки, максимально похожие на настоящие
+
+	// Assemble headers that closely resemble a real Nginx response.
 	headers := fmt.Sprintf(
 		"HTTP/1.1 200 OK\r\n"+
 			"Server: nginx/1.18.0 (Ubuntu)\r\n"+
@@ -52,7 +52,7 @@ func GetNginxResponse() []byte {
 		len(nginxHTMLBody),
 	)
 
-	// Соединяем заголовки и тело ответа
+	// Combine headers and body to form the full response.
 	fullResponse := headers + nginxHTMLBody
 
 	return []byte(fullResponse)
